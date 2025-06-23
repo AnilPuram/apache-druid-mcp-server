@@ -28,7 +28,7 @@ ENTRYPOINT ["node", "dist/index.js"]
 # Labels for metadata
 LABEL org.opencontainers.image.title="Apache Druid MCP Server"
 LABEL org.opencontainers.image.description="Model Context Protocol server for Apache Druid"
-LABEL org.opencontainers.image.url="https://github.com/apache/druid"
-LABEL org.opencontainers.image.source="https://github.com/apache/druid"
+LABEL org.opencontainers.image.url="https://github.com/AnilPuram/apache-druid-mcp-server"
+LABEL org.opencontainers.image.source="https://github.com/AnilPuram/apache-druid-mcp-server"
 LABEL org.opencontainers.image.version="1.0.0"
 LABEL org.opencontainers.image.licenses="Apache-2.0"
