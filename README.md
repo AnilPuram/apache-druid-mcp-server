@@ -9,7 +9,7 @@ Model Context Protocol (MCP) server for Apache Druid - provides tools and resour
 - 📋 Get detailed metadata including schema, segments, and size information
 - 🔗 Test Druid cluster connectivity
 - 🚀 Multiple transport protocols: stdio (default) and Server-Sent Events (SSE)
-- 🐳 Docker support for containerized deployments
+- 🐳 Docker support via published image
 
 ## Quick Start
 
@@ -35,18 +35,6 @@ docker run -i \
   -e DRUID_USERNAME=your-username \
   -e DRUID_PASSWORD=your-password \
   anilreddy399/apache-druid-mcp:latest
-```
-
-Or build locally:
-
-```bash
-# Clone the repository
-git clone https://github.com/your-username/apache-druid-mcp-server.git
-cd apache-druid-mcp-server
-
-# Build and run
-docker build -t apache-druid-mcp .
-docker run -p 3000:3000 apache-druid-mcp --transport sse --port 3000
 ```
 
 ### Local Development
