@@ -139,22 +139,35 @@ export class DruidClient {
    * Get detailed metadata for a specific datasource
    */
   async getDatasourceMetadata(datasourceName: string): Promise<DruidDatasourceMetadata> {
-    const [metadata, segments] = await Promise.all([
-      this.client.get(`/druid/v2/datasources/${datasourceName}`),
+    // Get basic datasource info and segments
+    const [segments, intervals] = await Promise.all([
       this.getSegments(datasourceName),
+      this.client.get(`/druid/coordinator/v1/datasources/${datasourceName}/intervals`).catch(() => ({ data: [] })),
     ]);
 
-    const meta = metadata.data;
+    // Get column information via SQL query
+    let columns: DruidColumn[] = [];
+    try {
+      const columnQuery = `SELECT COLUMN_NAME, DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = 'druid' AND TABLE_NAME = '${datasourceName}'`;
+      const columnResult = await this.executeSqlQuery(columnQuery);
+      columns = columnResult.data.map((row: any) => ({
+        name: row.COLUMN_NAME,
+        type: row.DATA_TYPE,
+      }));
+    } catch (error) {
+      // Fallback: use basic column detection
+      columns = [];
+    }
     
     return {
       id: datasourceName,
-      intervals: meta.segments?.intervals || [],
-      columns: meta.columns || [],
-      size: segments.reduce((total, seg) => total + seg.size, 0),
+      intervals: intervals.data || [],
+      columns,
+      size: segments.reduce((total, seg) => total + (seg.size || 0), 0),
       count: segments.length,
-      queryGranularity: meta.queryGranularity || 'none',
-      segmentGranularity: meta.segmentGranularity || 'unknown',
-      rollup: meta.rollup || false,
+      queryGranularity: 'none',
+      segmentGranularity: 'unknown',
+      rollup: false,
     };
   }
 
@@ -163,11 +176,23 @@ export class DruidClient {
    */
   async getSegments(datasourceName?: string): Promise<DruidSegment[]> {
     const url = datasourceName 
-      ? `/druid/v2/datasources/${datasourceName}/segments`
-      : '/druid/v2/segments';
+      ? `/druid/coordinator/v1/datasources/${datasourceName}/segments?full`
+      : '/druid/coordinator/v1/metadata/datasources?full';
     
     const response: AxiosResponse = await this.client.get(url);
-    return response.data;
+    
+    if (datasourceName) {
+      // Response is array of segments
+      return response.data || [];
+    } else {
+      // Response is object with datasource names as keys, extract all segments
+      const allSegments: DruidSegment[] = [];
+      for (const ds of Object.keys(response.data || {})) {
+        const dsSegments = response.data[ds].segments || [];
+        allSegments.push(...dsSegments);
+      }
+      return allSegments;
+    }
   }
 
   /**

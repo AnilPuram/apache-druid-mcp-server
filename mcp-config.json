@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "apache-druid-mcp": {
+      "command": "node",
+      "args": ["dist/index.js"],
+      "env": {
+        "DRUID_URL": "http://localhost:8888"
+      }
+    }
+  }
+}

@@ -2,6 +2,8 @@
 
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
+import express, { Request, Response } from 'express';
 import { 
   CallToolRequestSchema,
   ListResourcesRequestSchema,
@@ -18,20 +20,48 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import { DruidClient, DruidConfig } from './druid-client.js';
 
+interface ServerConfig {
+  druid: DruidConfig;
+  transport: 'stdio' | 'sse';
+  port?: number;
+}
+
 /**
- * Get configuration from environment variables
+ * Get configuration from environment variables and command line arguments
  */
-function getConfig(): DruidConfig {
-  const url = process.env.DRUID_URL || 'http://localhost:8888';
-  const username = process.env.DRUID_USERNAME;
-  const password = process.env.DRUID_PASSWORD;
-  const timeout = process.env.DRUID_TIMEOUT ? parseInt(process.env.DRUID_TIMEOUT) : 30000;
+function getConfig(): ServerConfig {
+  const druidConfig: DruidConfig = {
+    url: process.env.DRUID_URL || 'http://localhost:8888',
+    username: process.env.DRUID_USERNAME,
+    password: process.env.DRUID_PASSWORD,
+    timeout: process.env.DRUID_TIMEOUT ? parseInt(process.env.DRUID_TIMEOUT) : 30000,
+  };
+
+  // Parse command line arguments for transport selection
+  const args = process.argv.slice(2);
+  let transport: 'stdio' | 'sse' = 'stdio'; // Default to stdio
+  let port = 3000; // Default SSE port
+
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--transport' && args[i + 1]) {
+      const transportArg = args[i + 1];
+      if (transportArg === 'sse' || transportArg === 'stdio') {
+        transport = transportArg;
+      }
+      i++; // Skip next argument as it's the transport value
+    } else if (args[i] === '--port' && args[i + 1]) {
+      const portArg = parseInt(args[i + 1]);
+      if (!isNaN(portArg)) {
+        port = portArg;
+      }
+      i++; // Skip next argument as it's the port value
+    }
+  }
 
   return {
-    url,
-    username,
-    password,
-    timeout,
+    druid: druidConfig,
+    transport,
+    port,
   };
 }
 
@@ -40,38 +70,46 @@ function getConfig(): DruidConfig {
  */
 function showHelp(): void {
   console.error(`
-Apache Druid MCP Server v1.1.0
+Apache Druid MCP Server v1.0.1
 
 USAGE:
   apache-druid-mcp [OPTIONS]
 
 OPTIONS:
   --help               Show this help message
+  --transport <type>   Transport protocol: stdio (default) or sse
+  --port <number>      Port for SSE transport (default: 3000)
 
 ENVIRONMENT VARIABLES:
   DRUID_URL           Druid broker URL (default: http://localhost:8888)
-  DRUID_USERNAME      Optional username for authentication
-  DRUID_PASSWORD      Optional password for authentication
+  DRUID_USERNAME      Authentication username (required for most production clusters)
+  DRUID_PASSWORD      Authentication password (required for most production clusters)
   DRUID_TIMEOUT       Request timeout in milliseconds (default: 30000)
 
 EXAMPLES:
-  # Default configuration
+  # Default configuration (stdio transport)
   apache-druid-mcp
   
-  # Custom Druid URL
-  DRUID_URL=http://production-druid:8888 apache-druid-mcp
+  # Use SSE transport on default port 3000
+  apache-druid-mcp --transport sse
   
-  # With authentication
+  # Use SSE transport on custom port
+  apache-druid-mcp --transport sse --port 8080
+  
+  # Custom Druid URL with SSE transport
+  DRUID_URL=https://production-druid:8888 apache-druid-mcp --transport sse
+  
+  # With authentication and SSE transport
   DRUID_URL=https://secure-druid.example.com:8888 \\
   DRUID_USERNAME=admin \\
   DRUID_PASSWORD=secret \\
-  apache-druid-mcp
+  apache-druid-mcp --transport sse --port 4000
 `);
 }
 
-// Initialize Druid client
+// Initialize configuration
 const config = getConfig();
-const druidClient = new DruidClient(config);
+const druidClient = new DruidClient(config.druid);
 
 /**
  * List available tools
@@ -335,13 +373,17 @@ async function main(): Promise<void> {
   console.error('Starting Apache Druid MCP Server...');
 
   try {
-    console.error(`Druid URL: ${config.url}`);
+    console.error(`Druid URL: ${config.druid.url}`);
+    console.error(`Transport: ${config.transport}`);
+    if (config.transport === 'sse') {
+      console.error(`Port: ${config.port}`);
+    }
 
     // Create MCP server
     const server = new Server(
       {
         name: 'apache-druid-mcp',
-        version: '1.1.0',
+        version: '1.0.1',
       },
       {
         capabilities: {
@@ -357,12 +399,107 @@ async function main(): Promise<void> {
     server.setRequestHandler(ListResourcesRequestSchema, listResources);
     server.setRequestHandler(ReadResourceRequestSchema, readResource);
 
-    // Create stdio transport
-    const transport = new StdioServerTransport();
-    await server.connect(transport);
-
-    console.error('Apache Druid MCP Server started successfully!');
-    console.error('Using stdio transport for MCP client communication');
+    // Create and connect transport based on configuration
+    if (config.transport === 'sse') {
+      // Create Express app for SSE transport
+      const app = express();
+      app.use(express.json());
+      
+      // Store transports for session management
+      const transports: Record<string, SSEServerTransport> = {};
+      
+      // SSE endpoint that clients connect to
+      app.get('/sse', async (req: Request, res: Response) => {
+        console.error('Received GET request to /sse (establishing SSE stream)');
+        try {
+          // Create a new SSE transport for the client
+          // The endpoint for POST messages is '/messages'
+          const transport = new SSEServerTransport('/messages', res);
+          
+          // Store the transport by session ID
+          const sessionId = transport.sessionId;
+          transports[sessionId] = transport;
+          
+          // Set up onclose handler to clean up transport when closed
+          transport.onclose = () => {
+            console.error(`SSE transport closed for session ${sessionId}`);
+            delete transports[sessionId];
+          };
+          
+          // Connect the transport to the MCP server
+          await server.connect(transport);
+          console.error(`Established SSE stream with session ID: ${sessionId}`);
+        } catch (error) {
+          console.error('Error establishing SSE stream:', error);
+          if (!res.headersSent) {
+            res.status(500).send('Error establishing SSE stream');
+          }
+        }
+      });
+      
+      // Messages endpoint for client communication
+      app.post('/messages', async (req: Request, res: Response) => {
+        console.error('Received POST request to /messages');
+        try {
+          // Extract session ID from URL query parameter
+          const sessionId = req.query.sessionId as string;
+          
+          if (!sessionId) {
+            console.error('No session ID provided in request URL');
+            res.status(400).send('Missing sessionId parameter');
+            return;
+          }
+          
+          const transport = transports[sessionId];
+          if (!transport) {
+            console.error(`No active transport found for session ID: ${sessionId}`);
+            res.status(404).send('Session not found');
+            return;
+          }
+          
+          // Handle the POST message with the transport
+          await transport.handlePostMessage(req, res, req.body);
+        } catch (error) {
+          console.error('Error handling request:', error);
+          if (!res.headersSent) {
+            res.status(500).send('Error handling request');
+          }
+        }
+      });
+      
+      // Start Express server
+      const httpServer = app.listen(config.port, () => {
+        console.error('Apache Druid MCP Server started successfully!');
+        console.error(`Using SSE transport on http://localhost:${config.port}/sse`);
+        console.error(`Messages endpoint: http://localhost:${config.port}/messages`);
+        console.error('Server will keep running until terminated...');
+      });
+      
+      // Handle graceful shutdown for SSE transport
+      process.on('SIGINT', () => {
+        console.error('Shutting down SSE server...');
+        // Close all active transports to properly clean up resources
+        for (const sessionId in transports) {
+          try {
+            console.error(`Closing transport for session ${sessionId}`);
+            transports[sessionId].close();
+            delete transports[sessionId];
+          } catch (error) {
+            console.error(`Error closing transport for session ${sessionId}:`, error);
+          }
+        }
+        httpServer.close(() => {
+          process.exit(0);
+        });
+      });
+      
+    } else {
+      // Default stdio transport
+      const transport = new StdioServerTransport();
+      await server.connect(transport);
+      console.error('Apache Druid MCP Server started successfully!');
+      console.error('Using stdio transport for MCP client communication');
+    }
 
   } catch (error) {
     console.error('Failed to start server:', error);

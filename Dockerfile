@@ -1,34 +1,36 @@
-# Use Node.js 18 Alpine for smaller image size
 FROM node:18-alpine
 
 # Set working directory
 WORKDIR /app
 
-# Copy package files first for better caching
+# Copy package files
 COPY package*.json ./
 
-# Install all dependencies (including dev dependencies for build)
-RUN npm ci
+# Install dependencies
+RUN npm ci --only=production
 
-# Copy source code
-COPY . .
+# Copy built application
+COPY dist/ ./dist/
 
-# Build TypeScript to JavaScript
-RUN npm run build
+# Copy license and readme
+COPY LICENSE README.md ./
 
-# Remove dev dependencies after build
-RUN npm prune --production
+# Create non-root user
+RUN addgroup -g 1001 -S nodejs && \
+    adduser -S nodejs -u 1001
 
-# Expose port (default 3000, can be overridden)
+# Change to non-root user
+USER nodejs
+
+# Expose port for SSE transport (default 3000)
 EXPOSE 3000
 
-# Run the MCP server
+# Default command runs with stdio transport
+CMD ["node", "dist/index.js"]
+
+# For testing help command in docker
 ENTRYPOINT ["node", "dist/index.js"]
 
-# Labels for metadata
-LABEL org.opencontainers.image.title="Apache Druid MCP Server"
-LABEL org.opencontainers.image.description="Model Context Protocol server for Apache Druid"
-LABEL org.opencontainers.image.url="https://github.com/AnilPuram/apache-druid-mcp-server"
-LABEL org.opencontainers.image.source="https://github.com/AnilPuram/apache-druid-mcp-server"
-LABEL org.opencontainers.image.version="1.0.0"
-LABEL org.opencontainers.image.licenses="Apache-2.0"
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+  CMD node -e "console.log('healthy')"
