@@ -1,3 +1,5 @@
+[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/anilpuram-apache-druid-mcp-server-badge.png)](https://mseep.ai/app/anilpuram-apache-druid-mcp-server)
+
 # Apache Druid MCP Server
 
 Model Context Protocol (MCP) server for Apache Druid - provides tools and resources for querying and managing Druid datasources through Claude Desktop, VS Code, and other MCP clients.
